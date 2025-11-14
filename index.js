@@ -62,7 +62,7 @@ const INLINE_KEYBOARD = {
   ]
 };
 
-const bot = new TelegramBot(TG_TOKEN, { polling: false });
+const bot = new TelegramBot(TG_TOKEN, { polling: true });
 const provider = new ethers.JsonRpcProvider(LINEA_HTTP);
 
 // ===== ABI =====
