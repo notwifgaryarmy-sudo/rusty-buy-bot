@@ -9,12 +9,13 @@ const CHAT_ID = process.env.CHAT_ID; // -1002325097713
 const LINEA_HTTP = process.env.LINEA_RPC_HTTP || "https://rpc.linea.build";
 const PORT = process.env.PORT || 10000;
 
+// REQUIRED
 if (!TG_TOKEN || !CHAT_ID) {
   console.error("❌ Missing TG_TOKEN or CHAT_ID");
   process.exit(1);
 }
 
-// ===== HTTP keep-alive (Render) =====
+// ===== HTTP keep-alive for Render =====
 http
   .createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
@@ -25,27 +26,24 @@ http
 // ===== CONFIG (RUSTY) =====
 const RUSTY = "0x12bbdc004a0e9085ff94df1717336ecbc9f9e5fe";
 
-// trust router + pool (currently just the main pair; you can add routers later)
+// trusted router / pool (Rusty main pool)
 const KNOWN_SOURCES = new Set([
-  "0x179e7c5721672417fe0e4998d9cf6ff68b792eee".toLowerCase() // RUSTY main pair
+  "0x179e7c5721672417fe0e4998d9cf6ff68b792eee".toLowerCase()
 ]);
 
-// Dexscreener for price/MC (from your chart link)
+// Dexscreener API endpoint
 const DEX_URL =
   "https://api.dexscreener.com/latest/dex/pairs/linea/0x179e7c5721672417fe0e4998d9cf6ff68b792eee";
 
-// Telegram media file_id for your GIF/clip
-// NOTE: if Telegram complains about "file_id invalid", grab the real file_id
-// with @getidsbot and paste it here instead.
+// Telegram MEDIA FILE ID
 const VIDEO_FILE_ID = "2128373400";
 
-// Used in the fallback MC calc when FDV isn't available
-// (you said total supply is 1,000,000,000)
+// Rusty total supply
 const RUSTY_SUPPLY = 1_000_000_000;
 
 const MC_ICON = "🏦";
 
-// buttons
+// BUY + CHART buttons
 const INLINE_KEYBOARD = {
   inline_keyboard: [
     [
@@ -66,7 +64,7 @@ const INLINE_KEYBOARD = {
 const bot = new TelegramBot(TG_TOKEN, { polling: false });
 const provider = new ethers.JsonRpcProvider(LINEA_HTTP);
 
-// ===== ABI =====
+// ===== ERC20 ABI =====
 const ERC20_ABI = [
   "event Transfer(address indexed from, address indexed to, uint256 value)"
 ];
@@ -85,7 +83,7 @@ let lastDex = null;
 let lastDexTs = 0;
 const DEX_TTL_MS = 60_000;
 
-// ===== Dex (cached) =====
+// ===== Dexscreener cached fetch =====
 async function getDexInfoCached() {
   const now = Date.now();
   if (lastDex && now - lastDexTs < DEX_TTL_MS) {
@@ -95,11 +93,13 @@ async function getDexInfoCached() {
   try {
     const res = await fetch(DEX_URL);
     const text = await res.text();
+
     if (text.trim().startsWith("<")) {
       console.error("dexscreener returned HTML (rate limited)");
       if (lastDex) return { ...lastDex, fromCache: true, rateLimited: true };
       return null;
     }
+
     const data = JSON.parse(text);
     const pair = data?.pairs?.[0];
     if (!pair) return null;
@@ -125,10 +125,10 @@ async function fallbackPrice() {
   return { priceUsd: 0, mc: 0 };
 }
 
-// ===== main setup =====
+// ===== Setup =====
 async function setup() {
   const currentBlock = await provider.getBlockNumber();
-  console.log("Rusty bot started (TRANSFER mode). Current block:", currentBlock);
+  console.log("Rusty bot started. Current block:", currentBlock);
   lastBlock = currentBlock;
 
   setInterval(() => {
@@ -136,8 +136,10 @@ async function setup() {
   }, 5000);
 }
 
+// ===== Poll Transfers =====
 async function pollTransfers() {
   const now = Date.now();
+
   for (const [k, ts] of recentSends.entries()) {
     if (now - ts > RECENT_WINDOW_MS) recentSends.delete(k);
   }
@@ -158,7 +160,7 @@ async function pollTransfers() {
   });
 
   if (logs.length === 0) {
-    console.log("…no RUSTY transfers this interval");
+    console.log("…no RUSTY transfers");
   }
 
   for (const log of logs) {
@@ -179,24 +181,23 @@ async function pollTransfers() {
   lastBlock = latest;
 }
 
+// ===== Handle Transfer =====
 async function handleTransferLog(log) {
   const parsed = iface.parseLog(log);
   const { from, to, value } = parsed.args;
+
   if (value === 0n) return;
 
   const fromL = from.toLowerCase();
 
-  // only alert if it came from router/pool
+  // only alerts from trusted pair
   if (!KNOWN_SOURCES.has(fromL)) {
-    console.log("  skip transfer from unknown source:", from);
+    console.log("  skip (unknown source):", from);
     return;
   }
 
-  // 1 tx = 1 alert
-  if (seenTx.has(log.transactionHash)) {
-    console.log("  skip (tx already alerted):", log.transactionHash);
-    return;
-  }
+  // avoid double-alerts
+  if (seenTx.has(log.transactionHash)) return;
   seenTx.add(log.transactionHash);
   if (seenTx.size > 500) {
     const first = seenTx.values().next().value;
@@ -205,7 +206,7 @@ async function handleTransferLog(log) {
 
   const rustyAmount = Number(ethers.formatUnits(value, 18));
 
-  // pricing
+  // price
   const ds = await getDexInfoCached();
   let usdValue = 0;
   let mcPretty = "--";
@@ -233,23 +234,18 @@ async function handleTransferLog(log) {
         fb.mc >= 1_000_000
           ? `$${(fb.mc / 1_000_000).toFixed(2)}M (fb)`
           : `$${fb.mc.toLocaleString()} (fb)`;
-    } else {
-      usdValue = 0;
-      mcPretty = "--";
     }
   }
 
-  // ⚡ emoji logic:
-  // - 1 ⚡ per $1
-  // - minimum 1
-  // - maximum 100
+  // ⚡ EMOJI LOGIC
   let bolts = "⚡";
   if (usdValue > 0) {
-    const raw = Math.floor(usdValue); // $1 → 1, $10.9 → 10
+    const raw = Math.floor(usdValue);
     const clamped = Math.min(100, Math.max(1, raw));
     bolts = "⚡".repeat(clamped);
   }
 
+  // message text
   const caption = `🟢 RUSTY BUY
 👤 ${to}
 🪙 ${rustyAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })} RUSTY
@@ -257,23 +253,21 @@ async function handleTransferLog(log) {
 ${MC_ICON} MC: ${mcPretty}
 ${bolts}`;
 
+  // ===== SEND TO TOPIC #1 =====
   await bot.sendVideo(CHAT_ID, VIDEO_FILE_ID, {
     caption,
-    reply_markup: INLINE_KEYBOARD
+    reply_markup: INLINE_KEYBOARD,
+    message_thread_id: 1 // IMPORTANT!
   });
 
   console.log(
-    "✅ alert sent for transfer",
+    "✅ alert sent",
     log.transactionHash,
-    "to",
-    to,
-    "rusty",
+    "amount:",
     rustyAmount,
-    "usd",
+    "usd:",
     usdValue.toFixed(2),
-    "mc",
-    mcPretty,
-    "bolts",
+    "bolts:",
     bolts.length
   );
 }
