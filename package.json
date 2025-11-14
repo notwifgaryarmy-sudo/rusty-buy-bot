@@ -1,0 +1,12 @@
+{
+  "name": "rusty-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "ethers": "^6.13.1",
+    "node-fetch": "2.7.0",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
