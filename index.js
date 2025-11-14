@@ -36,8 +36,9 @@ const KNOWN_SOURCES = new Set([
 const DEX_URL =
   "https://api.dexscreener.com/latest/dex/pairs/linea/0x179e7c5721672417fe0e4998d9cf6ff68b792eee";
 
-// Telegram media file_id for your GIF
-const VIDEO_FILE_ID = "2128373400";
+// Telegram media file_id for your MP4 (from getUpdates)
+const VIDEO_FILE_ID =
+  "BAACAgQAAxkBAAMGaRdRgjYD1WhgZ0Z5lJdUtLe05XAAAkYaAAL977hQsBi87-VKIKo2BA";
 
 // Rusty total supply (1,000,000,000)
 const RUSTY_SUPPLY = 1_000_000_000;
@@ -62,7 +63,8 @@ const INLINE_KEYBOARD = {
   ]
 };
 
-const bot = new TelegramBot(TG_TOKEN, { polling: true });
+// polling: false (we only send messages, no need to receive updates now)
+const bot = new TelegramBot(TG_TOKEN, { polling: false });
 const provider = new ethers.JsonRpcProvider(LINEA_HTTP);
 
 // ===== ABI =====
@@ -209,7 +211,7 @@ async function handleTransferLog(log) {
     if (typeof ds.fdv === "number" && ds.fdv > 0) {
       mcPretty =
         ds.fdv >= 1_000_000
-          ? `$${(ds.fv / 1_000_000).toFixed(2)}M`
+          ? `$${(ds.fdv / 1_000_000).toFixed(2)}M`
           : `$${ds.fdv.toLocaleString()}`;
     } else {
       const mc = ds.priceUsd * RUSTY_SUPPLY;
@@ -244,10 +246,20 @@ async function handleTransferLog(log) {
 ${MC_ICON} MC: ${mcPretty}
 ${bolts}`;
 
-  await bot.sendVideo(CHAT_ID, VIDEO_FILE_ID, {
-    caption,
-    reply_markup: INLINE_KEYBOARD
-  });
+  try {
+    await bot.sendVideo(CHAT_ID, VIDEO_FILE_ID, {
+      caption,
+      reply_markup: INLINE_KEYBOARD
+    });
+  } catch (err) {
+    console.error(
+      "sendVideo failed, falling back to text:",
+      err?.message || err
+    );
+    await bot.sendMessage(CHAT_ID, caption, {
+      reply_markup: INLINE_KEYBOARD
+    });
+  }
 
   console.log(
     "✅ alert sent",
